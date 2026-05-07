@@ -283,6 +283,10 @@ def sales():
                 return jsonify({"error": "Product not found"}), 404
 
             new_sale = Sale(product_id=product_id)
+            #first create the sale record
+            #attach the sale id to the individual items. 
+            # then make the stk push request to mpesa. 
+            # then update the sale record with the payment details after the callback is received from mpesa in the /stk-call-back route
             try:
                 db.add(new_sale)
                 db.commit()
@@ -311,7 +315,7 @@ def stk_push():
     data = request.get_json()
     
     stk_response = make_stk_push(data)
-    # print("STK Push Response:", stk_response)
+    print("STK Push Response:", stk_response)
 
 #create a payment with id, sale_id, mrid, crid, created_at
     try:
@@ -337,9 +341,6 @@ def call_back():
     data = request.get_json()
 
     try:
-        if not data or "Body" not in data:
-            return jsonify({"ResultCode": 0, "ResultDesc": "Accepted"}), 200
-
         stk_callback = data["Body"]["stkCallback"]
 
         merchant_request_id = stk_callback.get("MerchantRequestID")
@@ -347,82 +348,47 @@ def call_back():
         result_code = stk_callback.get("ResultCode")
 
         with get_db() as db:
-
+            #fetch the payment record using mrid and crid
             payment = db.query(Payment).filter_by(
                 merchant_request_id=merchant_request_id,
-                checkout_request_id=checkout_request_id
-            ).first()
-
-            # Always accept callback (important for M-Pesa)
+                checkout_request_id=checkout_request_id).first()
+            
             if not payment:
-                return jsonify({"ResultCode": 0, "ResultDesc": "Accepted"}), 200
-
-            # prevent duplicate processing
-            if payment.status == "SUCCESS":
-                return jsonify({"ResultCode": 0, "ResultDesc": "Accepted"}), 200
-
-            sale = db.query(Sale).filter_by(id=payment.sale_id).first()
-
-            if not sale:
-                payment.status = "FAILED"
-                db.commit()
-                return jsonify({"ResultCode": 0, "ResultDesc": "Accepted"}), 200
-
-            # =========================
-            # SUCCESS CASE
-            # =========================
+                return jsonify({"error": "Payment not found"}), 404
+            
+            # update based on success or failure
             if result_code == 0:
+                callback_items = stk_callback["CallbackMetadata"]["Item"]
 
-                metadata = {}
-
-                if "CallbackMetadata" in stk_callback:
-                    metadata = {
-                        item["Name"]: item.get("Value")
-                        for item in stk_callback["CallbackMetadata"]["Item"]
-                    }
+                metadata = {item["Name"]: item.get("Value") for item in callback_items}
+                print("Payment Metadata:", metadata)
 
                 payment.transaction_code = metadata.get("MpesaReceiptNumber")
                 payment.amount = metadata.get("Amount")
-                payment.phone_paid = str(metadata.get("PhoneNumber"))
-                payment.status = "SUCCESS"
-
-                sale.status = "PAID"
-
-                # =========================
-                # BUILD ITEMS FROM SALE
-                # =========================
-                items = []
-
-                for item in sale.items:
-                    items.append({
-                        "name": item.product.product_name,
-                        "qty": item.quantity,
-                        "price": item.price
-                    })
-
-                receipt_data = {
-                    "receipt_no": payment.transaction_code,
-                    "customer_name": "Customer",
-                    "phone": payment.phone_paid,
-                    "items": items
-                }
-
-                try:
-                    generate_pdf(receipt_data, payment.transaction_code)
-                except Exception as e:
-                    print("PDF error:", e)
+                payment.phone_paid = metadata.get("PhoneNumber")
+                payment.status = "Success"
+                
+                #Now generate a pdf receipt using the metadata and save it to the reciepts folder with the name as the transaction code
+                # receipt_text = f"""Payment Receipt ..."""
+                # generate_pdf(receipt_text, f"{payment.transaction_code}.pdf")
+                receipt_text = f"""Payment Receipt
+                        Transaction Code: {payment.transaction_code}
+                        Amount: {payment.amount}
+                        Phone Number: {payment.phone_paid}
+                        Status: {payment.status}
+                        Thank you for your payment!"""
+                generate_pdf(receipt_text, f"{payment.transaction_code}.pdf")
 
             else:
-                payment.status = "FAILED"
-                sale.status = "FAILED"
+                payment.status = "Failed"
+                print("Payment Failed:", payment.status)
 
             db.commit()
-
-        return jsonify({"ResultCode": 0, "ResultDesc": "Accepted"}), 200
-
+        return jsonify({"message": "Callback processed successifully"}), 200
     except Exception as e:
-        print("Callback error:", e)
-        return jsonify({"ResultCode": 0, "ResultDesc": "Accepted"}), 200
+        print("Callback error:", str(e))
+        return jsonify({"error": "Failed to process callback"}), 500
+    # return jsonify({"message": "Callback received"}), 200
     
 #add a route for mpesa-payments its a get request it should fetch payments from payments table in db
 @app.route("/mpesa-payments", methods=["GET"])

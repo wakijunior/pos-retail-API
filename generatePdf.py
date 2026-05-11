@@ -116,8 +116,15 @@ def generate_pdf(data, filename):
     pdf.set_font("Arial", "", 10)
 
     subtotal = 0
+    
+    print("FULL DATA:", data)
+    print("DATA TYPE:", type(data))
+    print("ITEMS:", data["items"])
+    print("ITEMS TYPE:", type(data["items"]))
 
     for item in data["items"]:
+        print("ITEM:", item)
+        print("ITEM TYPE:", type(item))
 
         total = item["qty"] * item["price"]
         subtotal += total

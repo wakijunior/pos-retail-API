@@ -339,6 +339,8 @@ def stk_push():
 def call_back():
 
     data = request.get_json()
+    
+    print("STK Callback Data---------------:", data)
 
     try:
         stk_callback = data["Body"]["stkCallback"]
@@ -358,31 +360,44 @@ def call_back():
             
             # update based on success or failure
             if result_code == 0:
-                callback_items = stk_callback["CallbackMetadata"]["Item"]
 
-                metadata = {item["Name"]: item.get("Value") for item in callback_items}
+                callback_metadata = stk_callback.get("CallbackMetadata")
+
+                if not callback_metadata:
+                    return jsonify({"error": "No callback metadata"}), 400
+
+                callback_items = callback_metadata.get("Item", [])
+
+                metadata = {
+                    item["Name"]: item.get("Value")
+                    for item in callback_items
+                }
+
                 print("Payment Metadata:", metadata)
 
                 payment.transaction_code = metadata.get("MpesaReceiptNumber")
-                payment.amount = metadata.get("Amount")
-                payment.phone_paid = metadata.get("PhoneNumber")
+                payment.amount = float(metadata.get("Amount", 0))
+                payment.phone_paid = str(metadata.get("PhoneNumber"))
                 payment.status = "Success"
+
+                receipt_data = {
+                    "receipt_no": payment.transaction_code,
+                    "customer_name": "M-Pesa Customer",
+                    "phone": str(payment.phone_paid),
+
+                    "items": [
+                        {
+                            "name": "Payment",
+                            "qty": 1,
+                            "price": float(payment.amount)
+                        }
+                    ],
+
+                    "payment_method": "M-Pesa"
+                }
+
+                generate_pdf(receipt_data, payment.transaction_code)
                 
-                #Now generate a pdf receipt using the metadata and save it to the reciepts folder with the name as the transaction code
-                # receipt_text = f"""Payment Receipt ..."""
-                # generate_pdf(receipt_text, f"{payment.transaction_code}.pdf")
-                receipt_text = f"""Payment Receipt
-                        Transaction Code: {payment.transaction_code}
-                        Amount: {payment.amount}
-                        Phone Number: {payment.phone_paid}
-                        Status: {payment.status}
-                        Thank you for your payment!"""
-                generate_pdf(receipt_text, f"{payment.transaction_code}.pdf")
-
-            else:
-                payment.status = "Failed"
-                print("Payment Failed:", payment.status)
-
             db.commit()
         return jsonify({"message": "Callback processed successifully"}), 200
     except Exception as e:
